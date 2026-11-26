@@ -43,6 +43,21 @@ START_DISP_MARGIN = 18.0         # Pixels of individual ankle displacement to tr
 CONSECUTIVE_FRAMES = 3           # Hysteresis for state changes
 DEPTH_SAMPLE_RADIUS = 2          # 5x5 neighborhood
 
+# ── PERFORMER POSITION VALIDITY CHECK SETTINGS ──
+# Configurable tolerance for performer hip centre displacement:
+# allowed_tolerance = max(HIP_POSITION_MIN_TOLERANCE_PX, HIP_POSITION_TOLERANCE_HEIGHT_RATIO * frame_height)
+# Default: minimum 40 px, or 6% of frame height (e.g. 64.8 px at 1080p, 43.2 px at 720p).
+HIP_POSITION_MIN_TOLERANCE_PX = 40.0         # Minimum pixel tolerance (configurable default: 40 px)
+HIP_POSITION_TOLERANCE_HEIGHT_RATIO = 0.06   # Fraction of frame height (configurable default: 0.06 = 6%)
+
+# Sustained displacement confirmation duration (in seconds).
+# Hip centre displacement must remain beyond the allowed tolerance continuously
+# for at least 0.5 seconds before a position change is declared and the movement invalidated.
+HIP_POSITION_CONFIRM_SECONDS = 0.5           # Configurable confirmation duration in seconds (default: 0.5s)
+
+# Number of initial resting frames (approx 15-20) to average for reference hip centre.
+REF_HIP_SAMPLE_COUNT = 18                    # Configurable resting frame sample target (15-20 frames)
+
 L_ANKLE, R_ANKLE = 27, 28
 L_SHOULDER, R_SHOULDER = 11, 12
 L_HIP, R_HIP = 23, 24
@@ -332,6 +347,154 @@ def draw_sebt_overlay(frame, state, moving_ankle, stance_leg,
     else:
         stat_text = f"Ankle Separation: {curr_dist_ankles:5.1f} px"
     cv2.putText(frame, stat_text, (x1 + 12, y1 + 120), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (180, 180, 180), 1, cv2.LINE_AA)
+
+# ══════════════════════════════════════════════════════════════════
+# §1.4  PERFORMER POSITION VALIDITY CHECK  (new, independent component)
+# ══════════════════════════════════════════════════════════════════
+
+def compute_hip_centre_px(pl, w, h):
+    """
+    Returns the hip centre as (cx_px, cy_px) integer pixel coordinates.
+    Uses MediaPipe Pose landmarks L_HIP (23) and R_HIP (24).
+    Returns None if either landmark is not visible enough.
+    """
+    l_hip_lm = pl[L_HIP]
+    r_hip_lm = pl[R_HIP]
+    l_vis = getattr(l_hip_lm, 'visibility', 1.0)
+    r_vis = getattr(r_hip_lm, 'visibility', 1.0)
+    if (l_vis is not None and l_vis < 0.3) or (r_vis is not None and r_vis < 0.3):
+        return None
+    cx = int((l_hip_lm.x + r_hip_lm.x) / 2.0 * w)
+    cy = int((l_hip_lm.y + r_hip_lm.y) / 2.0 * h)
+    return (cx, cy)
+
+
+def draw_position_validity_overlay(frame, w, h,
+                                   ref_hip_px, curr_hip_px,
+                                   is_pos_invalid, is_verifying, direction,
+                                   displacement_px, tolerance_px):
+    """
+    Draws the performer-position validity status overlay on the frame.
+
+    - When position is VALID:
+        Small green banner 'POSITION VALID'.
+    - When position shift is detected but not yet sustained for >= 0.5s:
+        Amber banner 'POSITION SHIFT DETECTED - VERIFYING'.
+    - When sustained displacement is confirmed (>= 0.5s):
+        Prominent red banner:
+          'POSITION CHANGE DETECTED'
+          'Movement: [Direction]'
+          'Status: INVALID'
+          'Displacement: XX pixels'
+          'Allowed Tolerance: XX pixels'
+
+    Always displays distinguishable visual markers for initial reference and current hip centre
+    and a connecting line when displaced.
+    Placed in lower-right area so it does not clash with the upper-left SEBT HUD.
+    """
+    banner_w = 440
+    if is_pos_invalid:
+        banner_h = 130
+    elif is_verifying:
+        banner_h = 62
+    else:
+        banner_h = 36
+
+    x1 = w - banner_w - 12
+    y1 = h - banner_h - 12
+    x2 = w - 12
+    y2 = h - 12
+
+    sub = frame[y1:y2, x1:x2]
+    bg = np.full_like(sub, 15)
+    cv2.addWeighted(sub, 0.18, bg, 0.82, 0, sub)
+    frame[y1:y2, x1:x2] = sub
+
+    if is_pos_invalid:
+        border_col = (0, 60, 220)   # Red border
+        cv2.rectangle(frame, (x1, y1), (x2, y2), border_col, 2)
+
+        cv2.putText(frame, "POSITION CHANGE DETECTED",
+                    (x1 + 10, y1 + 22), cv2.FONT_HERSHEY_DUPLEX,
+                    0.56, (60, 60, 255), 2, cv2.LINE_AA)
+        cv2.putText(frame, f"Movement: {direction}",
+                    (x1 + 10, y1 + 46), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.46, (210, 210, 255), 1, cv2.LINE_AA)
+        cv2.putText(frame, "Status: INVALID",
+                    (x1 + 10, y1 + 68), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.46, (60, 80, 255), 1, cv2.LINE_AA)
+        cv2.putText(frame, f"Displacement: {displacement_px:.1f} pixels",
+                    (x1 + 10, y1 + 90), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.44, (190, 190, 255), 1, cv2.LINE_AA)
+        cv2.putText(frame, f"Allowed Tolerance: {tolerance_px:.1f} pixels",
+                    (x1 + 10, y1 + 112), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.44, (190, 190, 255), 1, cv2.LINE_AA)
+
+        # Visual markers for reference and current hip centres
+        if ref_hip_px is not None:
+            rx, ry = ref_hip_px
+            cv2.circle(frame, (rx, ry), 9, (255, 220, 0), 2)       # Gold ring
+            cv2.drawMarker(frame, (rx, ry), (255, 220, 0),
+                           cv2.MARKER_CROSS, 20, 2)
+            draw_text(frame, 'HIP_REF', (rx + 11, ry - 6), (255, 220, 0), scale=0.42)
+
+        if curr_hip_px is not None:
+            cx2, cy2 = curr_hip_px
+            cv2.circle(frame, (cx2, cy2), 9, (60, 60, 255), 2)     # Red ring
+            cv2.drawMarker(frame, (cx2, cy2), (60, 60, 255),
+                           cv2.MARKER_CROSS, 20, 2)
+            draw_text(frame, 'HIP_NOW', (cx2 + 11, cy2 + 14), (60, 60, 255), scale=0.42)
+
+        # Line connecting reference to current hip
+        if ref_hip_px is not None and curr_hip_px is not None:
+            cv2.line(frame, ref_hip_px, curr_hip_px, (60, 60, 255), 2)
+
+    elif is_verifying:
+        border_col = (0, 200, 255)  # Amber / Yellow border
+        cv2.rectangle(frame, (x1, y1), (x2, y2), border_col, 2)
+
+        cv2.putText(frame, "POSITION SHIFT DETECTED - VERIFYING",
+                    (x1 + 10, y1 + 24), cv2.FONT_HERSHEY_DUPLEX,
+                    0.48, (0, 220, 255), 2, cv2.LINE_AA)
+        cv2.putText(frame, f"Displacement: {displacement_px:.1f} px | Allowed: {tolerance_px:.1f} px",
+                    (x1 + 10, y1 + 48), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.44, (210, 240, 255), 1, cv2.LINE_AA)
+
+        # Visual markers with amber color
+        if ref_hip_px is not None:
+            rx, ry = ref_hip_px
+            cv2.circle(frame, (rx, ry), 8, (255, 220, 0), 2)
+            cv2.drawMarker(frame, (rx, ry), (255, 220, 0),
+                           cv2.MARKER_CROSS, 18, 2)
+            draw_text(frame, 'HIP_REF', (rx + 11, ry - 6), (255, 220, 0), scale=0.42)
+
+        if curr_hip_px is not None:
+            cx2, cy2 = curr_hip_px
+            cv2.circle(frame, (cx2, cy2), 8, (0, 200, 255), 2)
+            cv2.drawMarker(frame, (cx2, cy2), (0, 200, 255),
+                           cv2.MARKER_CROSS, 18, 2)
+            draw_text(frame, 'HIP_NOW', (cx2 + 11, cy2 + 14), (0, 200, 255), scale=0.42)
+
+        if ref_hip_px is not None and curr_hip_px is not None:
+            cv2.line(frame, ref_hip_px, curr_hip_px, (0, 200, 255), 2)
+
+    else:
+        border_col = (60, 200, 60)  # Green border
+        cv2.rectangle(frame, (x1, y1), (x2, y2), border_col, 2)
+        cv2.putText(frame, "POSITION VALID",
+                    (x1 + 10, y1 + 24), cv2.FONT_HERSHEY_DUPLEX,
+                    0.56, (60, 220, 60), 2, cv2.LINE_AA)
+
+        # Subtle reference hip marker when position is valid
+        if ref_hip_px is not None:
+            rx, ry = ref_hip_px
+            cv2.circle(frame, (rx, ry), 7, (60, 220, 60), 2)
+            draw_text(frame, 'HIP_REF', (rx + 10, ry - 5), (60, 220, 60), scale=0.40)
+
+        if curr_hip_px is not None:
+            cx2, cy2 = curr_hip_px
+            cv2.circle(frame, (cx2, cy2), 5, (60, 200, 60), -1)
+
 
 # ══════════════════════════════════════════════════════════════════
 # §1.5  LEG LENGTH & SCORING HELPERS
@@ -674,6 +837,11 @@ def main():
         print("\nAPPROXIMATE CAMERA INTRINSICS")
         print(f"fx = {FX}, fy = {FY}, cx = {CX}, cy = {CY}\n")
         
+        # Compute hip-position tolerance in pixels: max(40, 0.06 * frame_height)
+        hip_pos_tolerance_px = max(HIP_POSITION_MIN_TOLERANCE_PX, HIP_POSITION_TOLERANCE_HEIGHT_RATIO * h)
+        print(f"[position_check] Hip-centre allowed tolerance: {hip_pos_tolerance_px:.1f} px "
+              f"(max({HIP_POSITION_MIN_TOLERANCE_PX:.0f}, {HIP_POSITION_TOLERANCE_HEIGHT_RATIO*100:.1f}% of frame height {h} px))\n")
+        
         video_writer = cv2.VideoWriter(OUT_VIDEO, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
         
         # CSV Init: Preserve 27 original columns, append extended SEBT scoring columns
@@ -689,7 +857,8 @@ def main():
             "manual_leg_length_abs_error_cm", "manual_leg_length_pct_error",
             "valid_directional_reach_distance_cm",
             "normalized_score_manual_pct", "normalized_score_video_pct",
-            "scoring_validity", "scoring_exclusion_reason"
+            "scoring_validity", "scoring_exclusion_reason",
+            "position_validity", "position_exclusion_reason"
         ])
         
         # State Variables
@@ -751,6 +920,19 @@ def main():
         last_confirmed_info = None
         results_summary = []
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if cap.isOpened() else 0
+        
+        # ── Performer Position Validity State ──────────────────────────────
+        # Reference hip centre established by averaging ~15-20 reliable frames in initial resting position.
+        # Tolerance computed once per video (line 841): max(HIP_POSITION_MIN_TOLERANCE_PX, HIP_POSITION_TOLERANCE_HEIGHT_RATIO * h).
+        ref_hip_samples = []              # Samples collected during initial resting position
+        ref_hip_centre_px = None          # (cx, cy) fixed average reference position; never reset
+        # Per-movement validity state (reset at every movement onset)
+        curr_movement_pos_invalid = False  # True once sustained position change is confirmed
+        hip_outside_consec_frames = 0     # Consecutive frames hip has been outside tolerance
+        hip_outside_start_time = None     # Timestamp (sec) when hip first moved outside tolerance
+        curr_hip_disp_px = 0.0            # Latest Euclidean displacement from reference (px)
+        curr_hip_centre_px = None         # Latest hip-centre pixel coords for overlay
+        # ──────────────────────────────────────────────────────────────────
         
         if not getattr(args, 'no_display', False):
             cv2.namedWindow("Offline Video Analysis", cv2.WINDOW_NORMAL)
@@ -839,6 +1021,17 @@ def main():
                     if not video_leg_calibrated and pl is not None and len(calib_resting_frames) < 10:
                         calib_resting_frames.append((frame.copy(), pl))
                     
+                    # Collect reliable hip centre samples while performer stands in initial position
+                    if ref_hip_centre_px is None and pl is not None:
+                        _hip_sample = compute_hip_centre_px(pl, w, h)
+                        if _hip_sample is not None:
+                            ref_hip_samples.append(_hip_sample)
+                            if len(ref_hip_samples) >= REF_HIP_SAMPLE_COUNT:
+                                avg_x = int(round(float(np.mean([pt[0] for pt in ref_hip_samples]))))
+                                avg_y = int(round(float(np.mean([pt[1] for pt in ref_hip_samples]))))
+                                ref_hip_centre_px = (avg_x, avg_y)
+                                print(f"[position_check] Reference hip centre established by averaging {len(ref_hip_samples)} initial resting frames: {ref_hip_centre_px}")
+                    
                     if len(dist_hist) > 15:
                         dist_hist.pop(0)
                     if len(l_pos_hist) > 15:
@@ -917,6 +1110,30 @@ def main():
                             provisional_dir = "Unknown"
                             provisional_angle = 0.0
                             consec_return = 0
+                            
+                            # ── Performer Position Validity: capture reference hip centre ──
+                            # Establish the reference once by averaging initial resting frames;
+                            # it stays fixed for all subsequent movements as required.
+                            if ref_hip_centre_px is None:
+                                if len(ref_hip_samples) > 0:
+                                    avg_x = int(round(float(np.mean([pt[0] for pt in ref_hip_samples]))))
+                                    avg_y = int(round(float(np.mean([pt[1] for pt in ref_hip_samples]))))
+                                    ref_hip_centre_px = (avg_x, avg_y)
+                                    print(f"[position_check] Reference hip centre established from {len(ref_hip_samples)} resting frames: {ref_hip_centre_px}")
+                                elif pose_result.pose_landmarks:
+                                    _pl_onset = pose_result.pose_landmarks[0]
+                                    _onset_hip = compute_hip_centre_px(_pl_onset, w, h)
+                                    if _onset_hip is not None:
+                                        ref_hip_centre_px = _onset_hip
+                                        print(f"[position_check] Reference hip centre established from onset frame: {ref_hip_centre_px}")
+                            # Reset per-movement position-validity counters
+                            curr_movement_pos_invalid = False
+                            hip_outside_consec_frames = 0
+                            hip_outside_start_time = None
+                            curr_hip_disp_px = 0.0
+                            curr_hip_centre_px = None
+                            # ─────────────────────────────────────────────────────────────
+                            
                             print(f"MOVEMENT START at frame {frame_idx} / {timestamp:.2f}s | Reaching: {moving_ankle} | Stance: {standing_ankle}")
                     else:
                         consec_start = 0
@@ -937,6 +1154,38 @@ def main():
                         provisional_dir = prov_dir
                         provisional_angle = prov_ang
                     reach_trajectory.append((frame_idx, prov_dir, prov_ang, curr_reach_disp))
+                    
+                    # ── Performer Position Validity: per-frame hip-centre check ──────
+                    # Euclidean displacement: sqrt((current_x - reference_x)^2 + (current_y - reference_y)^2)
+                    if pose_result.pose_landmarks and ref_hip_centre_px is not None:
+                        _pl_now = pose_result.pose_landmarks[0]
+                        curr_hip_centre_px = compute_hip_centre_px(_pl_now, w, h)
+                        if curr_hip_centre_px is not None:
+                            curr_hip_disp_px = float(math.hypot(
+                                curr_hip_centre_px[0] - ref_hip_centre_px[0],
+                                curr_hip_centre_px[1] - ref_hip_centre_px[1]
+                            ))
+                            if curr_hip_disp_px > hip_pos_tolerance_px:
+                                hip_outside_consec_frames += 1
+                                if hip_outside_start_time is None:
+                                    hip_outside_start_time = timestamp
+                                elapsed_outside = timestamp - hip_outside_start_time
+                                confirm_frames_req = max(1, int(round(fps * HIP_POSITION_CONFIRM_SECONDS)))
+
+                                # Sustained duration confirmation: >= 0.5s elapsed or >= confirm_frames_req
+                                if elapsed_outside >= HIP_POSITION_CONFIRM_SECONDS or hip_outside_consec_frames >= confirm_frames_req:
+                                    if not curr_movement_pos_invalid:
+                                        print(
+                                            f"[position_check] M{curr_movement_num} POSITION INVALID "
+                                            f"at frame {frame_idx} ({timestamp:.2f}s): sustained hip displacement {curr_hip_disp_px:.1f} px "
+                                            f"(allowed tolerance: {hip_pos_tolerance_px:.1f} px) for {elapsed_outside:.2f}s"
+                                        )
+                                    curr_movement_pos_invalid = True
+                            else:
+                                # Hip centre returned within permitted tolerance -> reset confirmation counters
+                                hip_outside_consec_frames = 0
+                                hip_outside_start_time = None
+                    # ─────────────────────────────────────────────────────────────────
                     
                     # Track maximum reach displacement and maximum pixel distance
                     if curr_reach_disp > max_reach_disp or curr_dist_ankles > max_pixel_dist:
@@ -1039,6 +1288,20 @@ def main():
                                 is_valid_score = False
                                 exclusion_reason = "EXCLUDED_MISSING_MANUAL_LEG_LENGTH"
 
+                            # ── Performer position validity check integration ──────────
+                            # Determined independently by per-frame hip-centre tracking.
+                            # Only overrides scoring when the existing checks have NOT
+                            # already invalidated the movement (to preserve original reasons).
+                            pos_validity_str = "POSITION_INVALID" if curr_movement_pos_invalid else "POSITION_VALID"
+                            pos_excl_reason = (
+                                f"EXCLUDED_POSITION_CHANGE_DETECTED (hip displaced >{hip_pos_tolerance_px:.1f}px)"
+                                if curr_movement_pos_invalid else "OK"
+                            )
+                            if curr_movement_pos_invalid and is_valid_score:
+                                is_valid_score = False
+                                exclusion_reason = pos_excl_reason
+                            # ──────────────────────────────────────────────────────────
+
                             if is_valid_score:
                                 valid_reach_dist_cm = directional_disp_3d
                                 norm_score_manual_pct = (valid_reach_dist_cm / manual_stance_len) * 100.0
@@ -1107,7 +1370,9 @@ def main():
                                 round(norm_score_manual_pct, 2) if norm_score_manual_pct is not None else "",
                                 round(norm_score_video_pct, 2) if norm_score_video_pct is not None else "",
                                 scoring_validity,
-                                exclusion_reason
+                                exclusion_reason,
+                                pos_validity_str,
+                                pos_excl_reason
                             ])
                             csv_f.flush()
                             
@@ -1127,7 +1392,9 @@ def main():
                                 'norm_score_manual_pct': norm_score_manual_pct,
                                 'norm_score_video_pct': norm_score_video_pct,
                                 'scoring_validity': scoring_validity,
-                                'scoring_exclusion_reason': exclusion_reason
+                                'scoring_exclusion_reason': exclusion_reason,
+                                'position_validity': pos_validity_str,
+                                'position_exclusion_reason': pos_excl_reason
                             }
                             movement_records.append(rec_dict)
                             results_summary.append((curr_movement_num, moving_ankle, standing_ankle, final_dir, final_ang, final_conf, directional_disp_3d, dist_3d))
@@ -1159,6 +1426,18 @@ def main():
                 curr_reach_disp, max_reach_disp, curr_dist_ankles, max_pixel_dist,
                 provisional_dir, provisional_angle, last_confirmed_info, w, h
             )
+            
+            # ── Performer Position Validity Overlay ─────────────────────────
+            # Only shown while a movement is in progress (S_MOVING).
+            if state == S_MOVING and ref_hip_centre_px is not None:
+                is_verifying = (not curr_movement_pos_invalid and curr_hip_disp_px > hip_pos_tolerance_px)
+                draw_position_validity_overlay(
+                    frame, w, h,
+                    ref_hip_centre_px, curr_hip_centre_px,
+                    curr_movement_pos_invalid, is_verifying, provisional_dir,
+                    curr_hip_disp_px, hip_pos_tolerance_px
+                )
+            # ────────────────────────────────────────────────────────────────
             
             video_writer.write(frame)
             
@@ -1250,6 +1529,17 @@ def main():
                 is_valid_score = False
                 exclusion_reason = "EXCLUDED_MISSING_MANUAL_LEG_LENGTH"
 
+            # ── Performer position validity check integration (end-of-video) ──
+            pos_validity_str = "POSITION_INVALID" if curr_movement_pos_invalid else "POSITION_VALID"
+            pos_excl_reason = (
+                f"EXCLUDED_POSITION_CHANGE_DETECTED (hip displaced >{hip_pos_tolerance_px:.1f}px)"
+                if curr_movement_pos_invalid else "OK"
+            )
+            if curr_movement_pos_invalid and is_valid_score:
+                is_valid_score = False
+                exclusion_reason = pos_excl_reason
+            # ──────────────────────────────────────────────────────────────────
+
             if is_valid_score:
                 valid_reach_dist_cm = directional_disp_3d
                 norm_score_manual_pct = (valid_reach_dist_cm / manual_stance_len) * 100.0
@@ -1280,7 +1570,9 @@ def main():
                 round(norm_score_manual_pct, 2) if norm_score_manual_pct is not None else "",
                 round(norm_score_video_pct, 2) if norm_score_video_pct is not None else "",
                 scoring_validity,
-                exclusion_reason
+                exclusion_reason,
+                pos_validity_str,
+                pos_excl_reason
             ])
             csv_f.flush()
             
@@ -1300,7 +1592,9 @@ def main():
                 'norm_score_manual_pct': norm_score_manual_pct,
                 'norm_score_video_pct': norm_score_video_pct,
                 'scoring_validity': scoring_validity,
-                'scoring_exclusion_reason': exclusion_reason
+                'scoring_exclusion_reason': exclusion_reason,
+                'position_validity': pos_validity_str,
+                'position_exclusion_reason': pos_excl_reason
             }
             movement_records.append(rec_dict)
             results_summary.append((curr_movement_num, moving_ankle, standing_ankle, final_dir, final_ang, final_conf, directional_disp_3d, dist_3d))
