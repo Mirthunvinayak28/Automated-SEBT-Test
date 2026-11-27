@@ -942,6 +942,9 @@ def main():
             ok, frame = cap.read()
             if not ok:
                 break
+            # Clean copy BEFORE any skeleton/marker/overlay drawing; used for depth inference
+            # so depth is never estimated on annotated pixels. Same geometry as MediaPipe input.
+            raw_frame = frame.copy()
             
             frame_idx += 1
             timestamp = frame_idx / fps
@@ -1019,7 +1022,7 @@ def main():
                     
                     # Accumulate resting frames for video leg calibration
                     if not video_leg_calibrated and pl is not None and len(calib_resting_frames) < 10:
-                        calib_resting_frames.append((frame.copy(), pl))
+                        calib_resting_frames.append((raw_frame.copy(), pl))
                     
                     # Collect reliable hip centre samples while performer stands in initial position
                     if ref_hip_centre_px is None and pl is not None:
@@ -1086,7 +1089,7 @@ def main():
                             
                             # Calibrate video leg lengths on first movement onset
                             if not video_leg_calibrated:
-                                frames_to_use = calib_resting_frames if len(calib_resting_frames) > 0 else [(frame.copy(), pl)]
+                                frames_to_use = calib_resting_frames if len(calib_resting_frames) > 0 else [(raw_frame.copy(), pl)]
                                 est_left_leg_cm, est_right_leg_cm, left_error_cm, left_error_pct, right_error_cm, right_error_pct = calibrate_video_leg_lengths(
                                     depth_model, device, frames_to_use, w, h, CX, CY, FX, FY,
                                     manual_left_leg_length_cm, manual_right_leg_length_cm
@@ -1099,7 +1102,7 @@ def main():
                             moving_base = active_base_l if moving_ankle == 'LEFT' else active_base_r
                             max_reach_disp = _dist(max_pos_red, moving_base)
                             
-                            max_frame_img = frame.copy()
+                            max_frame_img = raw_frame.copy()
                             max_frame_idx = frame_idx
                             max_timestamp = timestamp
                             
@@ -1195,7 +1198,7 @@ def main():
                             max_pixel_dist = curr_dist_ankles
                         max_pos_red = curr_pos_red
                         max_pos_blue = curr_pos_blue
-                        max_frame_img = frame.copy()
+                        max_frame_img = raw_frame.copy()
                         max_frame_idx = frame_idx
                         max_timestamp = timestamp
                     

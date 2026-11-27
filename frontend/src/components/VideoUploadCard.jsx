@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { UploadCloud, FileVideo, Trash2, Play, AlertCircle, FileCheck, Database } from 'lucide-react';
+import { UploadCloud, FileVideo, Trash2, Play, AlertCircle, FileCheck } from 'lucide-react';
 
 export default function VideoUploadCard({
   selectedFile,
@@ -10,9 +10,7 @@ export default function VideoUploadCard({
   isAcknowledged,
   leftLegValid,
   rightLegValid,
-  isUploading,
-  onLoadSample,
-  samples = []
+  isUploading
 }) {
   const fileInputRef = useRef(null);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -105,28 +103,6 @@ export default function VideoUploadCard({
             <div style={{ marginTop: '12px', color: 'var(--danger-text)', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.88rem' }}>
               <AlertCircle size={16} color="var(--danger-dot)" />
               <span>{fileError}</span>
-            </div>
-          )}
-
-          {/* Quick Benchmark Option */}
-          {samples.length > 0 && (
-            <div style={{ marginTop: '20px', padding: '16px', background: '#f8fafc', border: '1px dashed var(--border-strong)', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
-              <div style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '8px' }}>
-                Need an immediate test run? Explore with precomputed clinical benchmark datasets:
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'center', gap: '10px', flexWrap: 'wrap' }}>
-                {samples.map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    className="btn btn-sm btn-outline-primary"
-                    onClick={() => onLoadSample(s.id)}
-                  >
-                    <Database size={14} />
-                    Load {s.video_filename} ({s.title.includes('12') ? '12 trials' : 'Quick trial'})
-                  </button>
-                ))}
-              </div>
             </div>
           )}
         </>

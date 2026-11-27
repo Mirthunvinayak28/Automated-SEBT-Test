@@ -41,20 +41,16 @@ def health_check():
 
 @app.get("/api/sebt/samples")
 def list_samples():
-    """Returns available precomputed SEBT benchmark datasets for instant demonstration."""
-    return job_manager.list_samples()
+    """Returns available sample datasets (disabled to ensure current analysis logic is used)."""
+    return []
 
 @app.post("/api/sebt/load-sample/{sample_id}")
 def load_sample(sample_id: str):
-    """Loads a precomputed sample dataset without waiting for pipeline execution."""
-    job = job_manager.get_job(sample_id)
-    if not job:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Sample '{sample_id}' not found.")
-    return {
-        "job_id": sample_id,
-        "status": job["status"],
-        "message": f"Sample dataset '{job.get('title')}' loaded successfully."
-    }
+    """Sample datasets have been removed as they used obsolete precomputed logic."""
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Sample datasets have been removed. Please upload and analyze a video using the current pipeline."
+    )
 
 @app.post("/api/sebt/analyze")
 async def analyze_sebt_video(

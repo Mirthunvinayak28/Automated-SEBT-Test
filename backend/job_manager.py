@@ -32,72 +32,9 @@ class JobManager:
     def __init__(self):
         self.jobs: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
-        self._init_sample_jobs()
-
-    def _init_sample_jobs(self):
-        """Registers built-in sample datasets from existing results for instant demonstration."""
-        sample_configs = [
-            {
-                'id': 'sample-test6',
-                'title': 'Sample Dataset 1 (Test 6 — 12 movements, 7 directions)',
-                'base_name': 'test6',
-                'left_leg': 90.0,
-                'right_leg': 91.0,
-                'filename': 'test6.mp4'
-            },
-            {
-                'id': 'sample-test5',
-                'title': 'Sample Dataset 2 (Test 5 — 6 movements, quick trial)',
-                'base_name': 'test5',
-                'left_leg': 88.0,
-                'right_leg': 88.0,
-                'filename': 'test5.mp4'
-            }
-        ]
-
-        for cfg in sample_configs:
-            base = cfg['base_name']
-            video_path = os.path.join(RESULTS_DIR, f"{base}_depth_visualized.mp4")
-            csv_results = os.path.join(RESULTS_DIR, f"{base}_depth_results.csv")
-            csv_summary = os.path.join(RESULTS_DIR, f"{base}_sebt_summary.csv")
-
-            if os.path.exists(csv_results) and os.path.exists(csv_summary):
-                parsed = get_complete_sebt_results(csv_results, csv_summary)
-                self.jobs[cfg['id']] = {
-                    'id': cfg['id'],
-                    'is_sample': True,
-                    'title': cfg['title'],
-                    'video_filename': cfg['filename'],
-                    'left_leg': cfg['left_leg'],
-                    'right_leg': cfg['right_leg'],
-                    'status': 'completed',
-                    'created_at': time.time(),
-                    'progress': {
-                        'stage': 'Completed (Sample Dataset)',
-                        'percent': 100.0,
-                        'frame': 100,
-                        'total_frames': 100,
-                        'message': 'Sample analysis ready for exploration.'
-                    },
-                    'output_video_path': video_path,
-                    'results_csv_path': csv_results,
-                    'summary_csv_path': csv_summary,
-                    'results': parsed,
-                    'logs': ['Sample dataset preloaded.'],
-                    'error': None
-                }
 
     def list_samples(self):
-        return [
-            {
-                'id': j['id'],
-                'title': j.get('title'),
-                'video_filename': j['video_filename'],
-                'left_leg': j['left_leg'],
-                'right_leg': j['right_leg']
-            }
-            for j in self.jobs.values() if j.get('is_sample')
-        ]
+        return []
 
     def create_job(self, video_bytes: bytes, filename: str, left_leg: float, right_leg: float) -> str:
         job_id = f"job-{uuid.uuid4().hex[:10]}"

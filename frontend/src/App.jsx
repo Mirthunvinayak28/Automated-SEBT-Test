@@ -29,17 +29,6 @@ export default function App() {
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState(null);
 
-  // Sample Datasets List
-  const [samples, setSamples] = useState([]);
-
-  // Fetch available precomputed benchmark datasets on mount
-  useEffect(() => {
-    fetch('/api/sebt/samples')
-      .then((res) => (res.ok ? res.json() : []))
-      .then((data) => setSamples(data))
-      .catch((err) => console.log('Notice: Could not load sample list:', err));
-  }, []);
-
   // Validation
   const isLeftLegValid = parseFloat(leftLeg) > 0;
   const isRightLegValid = parseFloat(rightLeg) > 0;
@@ -157,42 +146,6 @@ export default function App() {
     }
   };
 
-  // Load precomputed sample dataset
-  const handleLoadSample = async (sampleId) => {
-    setError(null);
-    const sample = samples.find((s) => s.id === sampleId);
-    if (sample) {
-      setLeftLeg(sample.left_leg.toString());
-      setRightLeg(sample.right_leg.toString());
-    }
-    setIsAcknowledged(true);
-
-    try {
-      const res = await fetch(`/api/sebt/load-sample/${sampleId}`, { method: 'POST' });
-      if (res.ok) {
-        setJobId(sampleId);
-        setJobStatus({
-          status: 'completed',
-          progress: {
-            percent: 100,
-            stage: 'Completed (Sample Dataset)',
-            message: 'Sample benchmark loaded.',
-          },
-        });
-        await fetchResults(sampleId);
-
-        // Scroll to results
-        setTimeout(() => {
-          const el = document.getElementById('composite-scores-section');
-          if (el) el.scrollIntoView({ behavior: 'smooth' });
-        }, 200);
-      }
-    } catch (err) {
-      console.error('Error loading sample:', err);
-      setError('Could not load sample dataset.');
-    }
-  };
-
   // Reset session
   const handleReset = () => {
     setJobId(null);
@@ -210,8 +163,6 @@ export default function App() {
       {/* 1. Header */}
       <Header
         onReset={handleReset}
-        onLoadSample={handleLoadSample}
-        samples={samples}
         currentJobId={jobId}
       />
 
@@ -241,8 +192,6 @@ export default function App() {
         leftLegValid={isLeftLegValid}
         rightLegValid={isRightLegValid}
         isUploading={isUploading}
-        onLoadSample={handleLoadSample}
-        samples={samples}
       />
 
       {/* 5. Step 4: Real-Time Processing Status */}
